@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE CLIENT
@@ -550,14 +550,27 @@ function Home({user,setView,setSelectedGroup}) {
 // ─────────────────────────────────────────────────────────────────────────────
 function GroupBrowser({user,setView,setSelectedGroup}) {
   const [groups,setGroups]=useState([]);
+  const [myGroupIds,setMyGroupIds]=useState([]);
   const [search,setSearch]=useState("");
   const [loading,setLoading]=useState(true);
 
   useEffect(()=>{
-    db.select("groups","order=created_at.desc")
-      .then(async rows=>{
-        const admins = rows.length ? await sbFetch(`profiles?id=in.(${[...new Set(rows.map(g=>g.admin_id))].join(",")})&select=id,name`) : [];
-        setGroups(rows.map(g=>({...g,adminName:admins.find(a=>a.id===g.admin_id)?.name||""})));
+    Promise.all([
+      db.select("groups","order=created_at.desc").catch(()=>[]),
+      db.select("members","user_id=eq."+user.id+"&status=neq.removed&select=group_id").catch(()=>[]),
+    ]).then(async([rows,myMems])=>{
+        setMyGroupIds((myMems||[]).map(m=>m.group_id));
+        if(!rows?.length){setGroups([]);setLoading(false);return;}
+        const adminIds=[...new Set(rows.map(g=>g.admin_id))];
+        const [admins,allMembers] = await Promise.all([
+          sbFetch("profiles?id=in.("+adminIds.join(",")+")"+"&select=id,name"),
+          db.select("members","group_id=in.("+rows.map(g=>g.id).join(",")+")"+"&status=neq.removed&select=group_id"),
+        ]);
+        setGroups(rows.map(g=>({
+          ...g,
+          adminName:(admins||[]).find(a=>a.id===g.admin_id)?.name||"",
+          memberCount:(allMembers||[]).filter(m=>m.group_id===g.id).length,
+        })));
         setLoading(false);
       }).catch(()=>setLoading(false));
   },[]);
@@ -573,15 +586,19 @@ function GroupBrowser({user,setView,setSelectedGroup}) {
       <Inp placeholder="Search groups..." value={search} onChange={e=>setSearch(e.target.value)}/>
       {filtered.map(g=>{
         const isMine = g.admin_id===user.id;
+        const isMember = !isMine && myGroupIds.includes(g.id);
         return (
-          <Card key={g.id} onClick={isMine?()=>{setSelectedGroup(g.id);setView("group-detail");}:null} style={{marginBottom:10,cursor:isMine?"pointer":"default"}}>
+          <Card key={g.id} onClick={(isMine||isMember)?()=>{setSelectedGroup(g.id);setView("group-detail");}:null} style={{marginBottom:10,cursor:(isMine||isMember)?"pointer":"default"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-              <div>
+              <div style={{flex:1}}>
                 <div style={{color:C.text,fontWeight:700,fontSize:15,marginBottom:3}}>{g.name}</div>
-                <div style={{color:C.muted,fontSize:12}}>Admin: {g.adminName}</div>
+                <div style={{color:C.muted,fontSize:12}}>Admin: {g.adminName} · {g.memberCount||0} members</div>
+                <div style={{color:C.muted,fontSize:12,marginTop:1}}>{fmt(g.contribution_amount)}/cycle · {g.payout_schedule}</div>
                 {g.description&&<div style={{color:C.muted,fontSize:13,marginTop:4}}>{g.description}</div>}
+                {!isMine&&!isMember&&<div style={{color:C.muted,fontSize:11,marginTop:6,fontStyle:"italic"}}>Contact the admin to join</div>}
               </div>
               <div style={{textAlign:"right",flexShrink:0,marginLeft:16}}>
+                {isMember&&!isMine&&<div style={{color:C.green,fontSize:11,marginTop:2}}>Member</div>}
                 {isMine&&<div style={{color:C.amber,fontSize:11,marginTop:2}}>Admin</div>}
               </div>
             </div>
@@ -682,6 +699,9 @@ function GroupDetail({user,groupId,setView}) {
   const [loans,setLoans]=useState([]);
   const [votes,setVotes]=useState([]);
   const [messages,setMessages]=useState([]);
+  const [msgOffset,setMsgOffset]=useState(0);
+  const [hasMoreMsgs,setHasMoreMsgs]=useState(false);
+  const [loadingMore,setLoadingMore]=useState(false);
   const [panel,setPanel]=useState(null);
   const [actionSheet,setActionSheet]=useState(false);
   const [modal,setModal]=useState(null);
@@ -710,10 +730,15 @@ function GroupDetail({user,groupId,setView}) {
         db.select("tranches",`group_id=eq.${groupId}&order=created_at.desc`).catch(()=>[]),
         db.select("loans",`group_id=eq.${groupId}&order=requested_at.desc`).catch(()=>[]),
         db.select("votes",`group_id=eq.${groupId}&order=created_at.desc`).catch(()=>[]),
-        db.select("messages",`group_id=eq.${groupId}&order=created_at.asc&limit=200`).catch(()=>[]),
+        db.select("messages",`group_id=eq.${groupId}&order=created_at.desc&limit=51`).catch(()=>[]),
       ]);
       setCycleSlots(sl||[]); setContribs(contribs||[]); setTranches(tr||[]);
-      setLoans(ls||[]); setVotes(vs||[]); setMessages(msgs||[]);
+      setLoans(ls||[]); setVotes(vs||[]);
+      // msgs fetched desc limit 51 — reverse for display, check if more exist
+      const msgArr=msgs||[];
+      setHasMoreMsgs(msgArr.length>50);
+      setMessages([...msgArr.slice(0,50)].reverse());
+      setMsgOffset(50);
     } catch(e){console.error("loadAll error:",e);}
     setLoading(false);
   }
@@ -723,8 +748,13 @@ function GroupDetail({user,groupId,setView}) {
 
   // Real-time message subscription
   useEffect(()=>{
-    const unsub = subscribe("messages",`group_id=eq.${groupId}`,()=>{
-      db.select("messages",`group_id=eq.${groupId}&order=created_at.asc&limit=200`).then(setMessages);
+    const unsub = subscribe("messages","group_id=eq."+groupId,()=>{
+      db.select("messages","group_id=eq."+groupId+"&order=created_at.desc&limit=51")
+        .then(rows=>{
+          setHasMoreMsgs((rows||[]).length>50);
+          setMessages([...(rows||[]).slice(0,50)].reverse());
+          setMsgOffset(50);
+        });
     });
     return unsub;
   },[groupId]);
@@ -750,6 +780,19 @@ function GroupDetail({user,groupId,setView}) {
   const paidSlots = cycleSlots.filter(s=>s.status==="paid");
   const pool = poolBalance(contributions,groupId);
   const heldTranches = tranches.filter(t=>t.status==="held");
+
+  async function loadEarlierMessages() {
+    if(!hasMoreMsgs||loadingMore)return;
+    setLoadingMore(true);
+    try {
+      const older = await db.select("messages","group_id=eq."+groupId+"&order=created_at.desc&limit=51&offset="+msgOffset);
+      const arr = older||[];
+      setHasMoreMsgs(arr.length>50);
+      setMessages(prev=>[...[...arr.slice(0,50)].reverse(),...prev]);
+      setMsgOffset(o=>o+50);
+    } catch(e){console.error(e);}
+    setLoadingMore(false);
+  }
 
   async function sendMessage() {
     if(!text.trim())return;
@@ -1008,6 +1051,13 @@ function GroupDetail({user,groupId,setView}) {
 
       {/* Chat */}
       <div style={{flex:1,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:6}}>
+        {hasMoreMsgs&&(
+          <div style={{textAlign:"center",margin:"8px 0 12px"}}>
+            <button onClick={loadEarlierMessages} disabled={loadingMore} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:"6px 16px",color:C.textMid,fontSize:12,cursor:loadingMore?"not-allowed":"pointer",fontFamily:"inherit"}}>
+              {loadingMore?"Loading...":"Load earlier messages"}
+            </button>
+          </div>
+        )}
         {messages.length===0&&<div style={{textAlign:"center",color:C.muted,fontSize:13,margin:"auto"}}>Group created. Start the conversation.</div>}
         {messages.map(m=>{
           if(m.system){
@@ -1556,26 +1606,48 @@ function VotesPanel({votes,members,user,groupId,isAdmin,loadAll}) {
 
 function VoteCard({vote,user,members,isAdmin,groupId,onVote,loadAll}) {
   const [choices,setChoices]=useState([]);
-  useEffect(()=>{ db.select("vote_choices",`vote_id=eq.${vote.id}`).then(setChoices); },[vote.id]);
-  const yeas=choices.filter(c=>c.choice==="yea").length;
-  const nays=choices.filter(c=>c.choice==="nay").length;
+  const [showVoters,setShowVoters]=useState(false);
+  useEffect(()=>{ db.select("vote_choices","vote_id=eq."+vote.id).then(c=>setChoices(c||[])); },[vote.id]);
+  const yeas=choices.filter(c=>c.choice==="yea");
+  const nays=choices.filter(c=>c.choice==="nay");
   const myVote=choices.find(c=>c.user_id===user.id);
   const canVote=!myVote&&vote.status==="open"&&!!members.find(m=>m.user_id===user.id);
-  const total=yeas+nays;
+  const total=yeas.length+nays.length;
+
+  // Map user ids to names using members list
+  const nameOf=uid=>members.find(m=>m.user_id===uid)?.name||"Unknown";
+
   return(
     <Card style={{marginBottom:12}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
         <div style={{flex:1}}><div style={{color:C.text,fontWeight:700,fontSize:14,marginBottom:2}}>{vote.question}</div>{vote.description&&<div style={{color:C.muted,fontSize:13,marginBottom:4}}>{vote.description}</div>}<div style={{color:C.muted,fontSize:11}}>{vote.created_by_name} · {fmtD(vote.created_at)} · {fmtAge(vote.created_at)}</div></div>
         <Badge color={vote.status==="open"?C.green:C.muted}>{vote.status}</Badge>
       </div>
-      <div style={{marginBottom:10}}>
-        <div style={{display:"flex",justifyContent:"space-between",color:C.muted,fontSize:12,marginBottom:4}}><span style={{color:C.green}}>{yeas} yes</span><span>{total} votes</span><span style={{color:C.red}}>{nays} no</span></div>
-        <div style={{height:4,background:C.surface,borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:`${total>0?Math.round(yeas/total*100):0}%`,background:C.green,borderRadius:2}}/></div>
+      <div style={{marginBottom:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",color:C.muted,fontSize:12,marginBottom:4}}>
+          <span style={{color:C.green,cursor:"pointer"}} onClick={()=>setShowVoters(s=>s==="yes"?false:"yes")}>{yeas.length} yes</span>
+          <span>{total} votes</span>
+          <span style={{color:C.red,cursor:"pointer"}} onClick={()=>setShowVoters(s=>s==="no"?false:"no")}>{nays.length} no</span>
+        </div>
+        <div style={{height:4,background:C.surface,borderRadius:2,overflow:"hidden",marginBottom:4}}><div style={{height:"100%",width:`${total>0?Math.round(yeas.length/total*100):0}%`,background:C.green,borderRadius:2}}/></div>
+        {/* Voter names — tap yes/no count to reveal */}
+        {showVoters==="yes"&&yeas.length>0&&(
+          <div style={{background:C.greenSoft,border:`1px solid ${C.green}22`,borderRadius:6,padding:"6px 10px",marginTop:6}}>
+            <div style={{color:C.green,fontSize:11,fontWeight:600,marginBottom:3}}>Voted Yes</div>
+            <div style={{color:C.textMid,fontSize:12}}>{yeas.map(c=>nameOf(c.user_id)).join(", ")}</div>
+          </div>
+        )}
+        {showVoters==="no"&&nays.length>0&&(
+          <div style={{background:C.redSoft,border:`1px solid ${C.red}22`,borderRadius:6,padding:"6px 10px",marginTop:6}}>
+            <div style={{color:C.red,fontSize:11,fontWeight:600,marginBottom:3}}>Voted No</div>
+            <div style={{color:C.textMid,fontSize:12}}>{nays.map(c=>nameOf(c.user_id)).join(", ")}</div>
+          </div>
+        )}
       </div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         {canVote&&<><Btn size="sm" variant="success" onClick={()=>onVote(vote.id,"yea")}>Yes</Btn><Btn size="sm" variant="danger" onClick={()=>onVote(vote.id,"nay")}>No</Btn></>}
         {myVote&&<span style={{color:C.muted,fontSize:12}}>You voted {myVote.choice==="yea"?"Yes":"No"}</span>}
-        {isAdmin&&vote.status==="open"&&<Btn size="sm" variant="ghost" style={{marginLeft:"auto"}} onClick={async()=>{await db.update("votes",`id=eq.${vote.id}`,{status:"closed",closed_at:now()});loadAll();}}>Close</Btn>}
+        {isAdmin&&vote.status==="open"&&<Btn size="sm" variant="ghost" style={{marginLeft:"auto"}} onClick={async()=>{await db.update("votes","id=eq."+vote.id,{status:"closed",closed_at:now()});loadAll();}}>Close</Btn>}
       </div>
     </Card>
   );
