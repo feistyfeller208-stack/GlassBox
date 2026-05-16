@@ -3,23 +3,31 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE CLIENT
 // ─────────────────────────────────────────────────────────────────────────────
+import { createClient } from "@supabase/supabase-js";
+
 const SUPA_URL = "https://lqxaksgskiltryejhkzx.supabase.co";
 const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxxeGFrc2dza2lsdHJ5ZWpoa3p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2OTkzNDUsImV4cCI6MjA5MjI3NTM0NX0.LomF2rKj95NRskD1AYDLCnLM0q6OLQe8SJhz_JZ7JOg";
 
-// Minimal Supabase client — no SDK dependency needed
-const headers = { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` };
+const supabase = createClient(SUPA_URL, SUPA_KEY);
 
-// Session expiry callback — set by Root component
+const headers = { "Content-Type":"application/json", "apikey":SUPA_KEY, "Authorization":`Bearer ${SUPA_KEY}` };
+
+let _token = localStorage.getItem("gb_token") || null;
+let _userId = localStorage.getItem("gb_uid") || null;
 let _onSessionExpired = null;
+
+const authed = () => ({ ...headers, "Authorization": `Bearer ${_token}` });
+
+function setSession(session) {
+  _token = session?.access_token || null;
+  _userId = session?.user?.id || null;
+  if (_token) { localStorage.setItem("gb_token", _token); localStorage.setItem("gb_uid", _userId); }
+  else { localStorage.removeItem("gb_token"); localStorage.removeItem("gb_uid"); }
+}
 
 async function sbFetch(path, opts = {}) {
   const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, { headers: { ...headers, ...(opts.headers||{}) }, ...opts });
-  if (res.status === 401) {
-    // Token expired — clear session and redirect to login
-    setSession(null);
-    if (_onSessionExpired) _onSessionExpired();
-    throw new Error("Session expired. Please sign in again.");
-  }
+  if (res.status === 401) { setSession(null); if (_onSessionExpired) _onSessionExpired(); throw new Error("Session expired. Please sign in again."); }
   if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.message || res.statusText); }
   if (res.status === 204) return null;
   return res.json();
@@ -32,35 +40,25 @@ async function sbAuth(path, body) {
   return data;
 }
 
-// Auth token management
-let _token = localStorage.getItem("gb_token") || null;
-let _userId = localStorage.getItem("gb_uid") || null;
-const authed = () => ({ ...headers, "Authorization": `Bearer ${_token}` });
-
-function setSession(session) {
-  _token = session?.access_token || null;
-  _userId = session?.user?.id || null;
-  if (_token) { localStorage.setItem("gb_token", _token); localStorage.setItem("gb_uid", _userId); }
-  else { localStorage.removeItem("gb_token"); localStorage.removeItem("gb_uid"); }
-}
-
-// DB helpers
 const db = {
   select: (table, query="") => sbFetch(`${table}?${query}`, { headers: authed() }),
-  insert: (table, data, opts="") => sbFetch(`${table}?${opts}`, { method:"POST", headers:{ ...authed(), "Prefer":"return=representation" }, body:JSON.stringify(data) }),
+  insert: (table, data) => sbFetch(`${table}`, { method:"POST", headers:{ ...authed(), "Prefer":"return=representation" }, body:JSON.stringify(data) }),
   update: (table, query, data) => sbFetch(`${table}?${query}`, { method:"PATCH", headers:{ ...authed(), "Prefer":"return=representation" }, body:JSON.stringify(data) }),
-  delete: (table, query) => sbFetch(`${table}?${query}`, { method:"DELETE", headers:{ ...authed(), "Prefer":"return=representation" } }),
-  rpc: (fn, body) => sbFetch(`rpc/${fn}`, { method:"POST", headers:authed(), body:JSON.stringify(body) }),
+  delete: (table, query) => sbFetch(`${table}?${query}`, { method:"DELETE", headers:{ ...authed() } }),
 };
 
-// Realtime subscription
-function subscribe(table, filter, callback) {
-  const ws = new WebSocket(`${SUPA_URL.replace("https","wss")}/realtime/v1/websocket?apikey=${SUPA_KEY}&vsn=1.0.0`);
-  const topic = `realtime:public:${table}${filter?`:${filter}`:""}`;
-  ws.onopen = () => ws.send(JSON.stringify({ topic, event:"phx_join", payload:{}, ref:"1" }));
-  ws.onmessage = e => { const d=JSON.parse(e.data); if(d.event==="INSERT"||d.event==="UPDATE"||d.event==="DELETE") callback(d); };
-  ws.onerror = () => {};
-  return () => ws.close();
+// Real-time using official Supabase client — this is reliable
+function subscribe(table, groupId, callback) {
+  const channel = supabase
+    .channel(`${table}-${groupId}`)
+    .on("postgres_changes", {
+      event: "*",
+      schema: "public",
+      table: table,
+      filter: `group_id=eq.${groupId}`,
+    }, callback)
+    .subscribe();
+  return () => supabase.removeChannel(channel);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
