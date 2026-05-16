@@ -562,14 +562,13 @@ function GroupBrowser({user,setView,setSelectedGroup}) {
         setMyGroupIds((myMems||[]).map(m=>m.group_id));
         if(!rows?.length){setGroups([]);setLoading(false);return;}
         const adminIds=[...new Set(rows.map(g=>g.admin_id))];
-        const [admins,allMembers] = await Promise.all([
-          sbFetch("profiles?id=in.("+adminIds.join(",")+")"+"&select=id,name"),
-          db.select("members","group_id=in.("+rows.map(g=>g.id).join(",")+")"+"&status=neq.removed&select=group_id"),
-        ]);
+        // Use member_count column stored on the group — readable by everyone
+        // Falls back to 0 if not yet set (for old groups)
+        const admins = await sbFetch("profiles?id=in.("+adminIds.join(",")+")"+"&select=id,name").catch(()=>[]);
         setGroups(rows.map(g=>({
           ...g,
           adminName:(admins||[]).find(a=>a.id===g.admin_id)?.name||"",
-          memberCount:(allMembers||[]).filter(m=>m.group_id===g.id).length,
+          memberCount:g.member_count||0,
         })));
         setLoading(false);
       }).catch(()=>setLoading(false));
@@ -627,7 +626,7 @@ function CreateGroup({user,setView,onGroupCreated}) {
         contribution_amount:Number(form.contributionAmount),
         payout_schedule:form.payoutSchedule, payout_percent:Number(form.payoutPercent),
         interest_rate:Number(form.interestRate), max_loan_multiplier:Number(form.maxLoanMultiplier),
-        status:"active", recipient_queue:[], round_number:1,
+        status:"active", recipient_queue:[], round_number:1, member_count:1,
       });
       // 2. Insert admin as first member
       const [member] = await db.insert("members",{
@@ -643,8 +642,7 @@ function CreateGroup({user,setView,onGroupCreated}) {
       });
       // 5. Create slot for admin
       await db.insert("slots",{ group_id:group.id, cycle_id:cycle.id, member_id:member.id, member_name:member.name, expected:Number(form.contributionAmount), paid:0, status:"pending" });
-      // 6. Update user role to admin
-      await db.update("profiles",`id=eq.${user.id}`,{ role:"admin" });
+      // 6. Role is per-group (group.admin_id) — no global role update needed
       // 7. Audit entry
       const entry = await buildEntry("GROUP_CREATED",{groupId:group.id},"GENESIS",user.id,user.name,group.id,`Group "${group.name}" created by ${user.name}`);
       await db.insert("audit_log",{...entry,group_id:group.id,user_id:user.id,user_name:user.name,prev_hash:entry.prev_hash,data:entry.data});
@@ -852,7 +850,10 @@ function GroupDetail({user,groupId,setView}) {
     if(members.find(m=>m.user_id===target.id&&m.status!=="removed"))return "Already a member.";
     const [member]=await db.insert("members",{group_id:groupId,user_id:target.id,name:target.name,phone:target.phone,status:"pending-cycle",total_contributed:0,total_received:0});
     const updQueue=[...group.recipient_queue,member.id];
-    await db.update("groups",`id=eq.${groupId}`,{recipient_queue:updQueue});
+    await db.update("groups","id=eq."+groupId,{
+      recipient_queue:updQueue,
+      member_count:(group.member_count||1)+1,
+    });
     const prevHash=await getLastHash(groupId);
     const entry=await buildEntry("MEMBER_ADDED",{memberId:member.id},prevHash,user.id,user.name,groupId,`${target.name} added by ${user.name}`);
     await db.insert("audit_log",{...entry,group_id:groupId,user_id:user.id,data:entry.data});
@@ -1292,7 +1293,12 @@ function MembersPanel({members,activeMembers,group,user,votes,loans,groupId,isAd
       const forfeitedTotal=held.reduce((s,t)=>s+t.amount,0);
       const g=await db.select("groups",`id=eq.${groupId}`);
       const updQueue=(g[0].recipient_queue||[]).filter(id=>id!==vote.removal_member_id);
-      await db.update("groups",`id=eq.${groupId}`,{recipient_queue:updQueue,current_recipient_id:updQueue[0]||null});
+      const grp=await db.select("groups","id=eq."+groupId);
+      await db.update("groups","id=eq."+groupId,{
+        recipient_queue:updQueue,
+        current_recipient_id:updQueue[0]||null,
+        member_count:Math.max(0,(grp[0]?.member_count||1)-1),
+      });
       await db.update("members",`id=eq.${vote.removal_member_id}`,{status:"removed",removed_at:now()});
       await db.update("votes",`id=eq.${vote.id}`,{status:"closed",closed_at:now()});
       const prevHash=await getLastHash(groupId);
@@ -1923,7 +1929,7 @@ function Profile({user,onLogout}) {
           <div style={{width:50,height:50,borderRadius:"50%",background:C.accentSoft,border:`1px solid rgba(37,99,235,.25)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:C.accent,fontWeight:900}}>{user.name.charAt(0).toUpperCase()}</div>
           <div style={{flex:1}}>
             <div style={{color:C.text,fontWeight:800,fontSize:17}}>{user.name}</div>
-            <div style={{color:C.muted,fontSize:13,marginTop:2}}>{user.phone}</div>
+            <div style={{color:C.muted,fontSize:13,marginTop:2}}>{user.phone} · Member since {fmtD(user.created_at)}</div>
           </div>
           <button onClick={onLogout} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 13px",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Sign out</button>
         </div>
