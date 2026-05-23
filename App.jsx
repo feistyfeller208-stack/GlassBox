@@ -744,16 +744,20 @@ function GroupDetail({user,groupId,setView}) {
 
   // Real-time message subscription
   useEffect(()=>{
-    const unsub = subscribe("messages","group_id=eq."+groupId,()=>{
-      db.select("messages","group_id=eq."+groupId+"&order=created_at.desc&limit=51")
-        .then(rows=>{
-          setHasMoreMsgs((rows||[]).length>50);
-          setMessages([...(rows||[]).slice(0,50)].reverse());
-          setMsgOffset(50);
-        });
-    });
-    return unsub;
-  },[groupId]);
+  let active=true;
+  const poll=async()=>{
+    if(!active)return;
+    try{
+      const rows=await db.select("messages","group_id=eq."+groupId+"&order=created_at.desc&limit=51");
+      if(!active)return;
+      setHasMoreMsgs((rows||[]).length>50);
+      setMessages([...(rows||[]).slice(0,50)].reverse());
+    }catch(e){}
+  };
+  poll();
+  const t=setInterval(poll,3000);
+  return()=>{active=false;clearInterval(t);};
+},[groupId]);
 
   // Real-time for contributions, slots, and group — properly cleaned up on unmount
   useEffect(()=>{
