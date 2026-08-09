@@ -742,7 +742,7 @@ function GroupDetail({user,groupId,setView}) {
   useEffect(()=>{ loadAll(); },[groupId]);
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[messages.length]);
 
-  // Real-time message subscription
+  //Real-time message subscription
   useEffect(()=>{
   let active=true;
   const poll=async()=>{
