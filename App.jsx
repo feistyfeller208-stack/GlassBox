@@ -610,6 +610,7 @@ function GroupBrowser({user,setView,setSelectedGroup}) {
 // CREATE GROUP
 // ─────────────────────────────────────────────────────────────────────────────
 function CreateGroup({user,setView,onGroupCreated}) {
+  const [otp,setOtp]=useState("");
   const [form,setForm]=useState({name:"",contributionAmount:"",payoutSchedule:"monthly",payoutPercent:"25",interestRate:"10",maxLoanMultiplier:"2",description:""});
   const [loading,setLoading]=useState(false);
   const [emailStep,setEmailStep]=useState(!user.email_verified);
@@ -619,22 +620,23 @@ function CreateGroup({user,setView,onGroupCreated}) {
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
 
   async function sendVerification(){
-    if(!email.trim()||!email.includes("@")){setEmailErr("Enter a valid email address.");return;}
-    setLoading(true);setEmailErr("");
-    try{
-      // Update email in Supabase Auth — triggers verification email
-      const res=await fetch(SUPA_URL+"/auth/v1/user",{
-        method:"PUT",
-        headers:{...headers,"Authorization":"Bearer "+_token,"Content-Type":"application/json"},
-        body:JSON.stringify({email:email.trim()}),
-      });
-      if(!res.ok)throw new Error("Failed to send verification email.");
-      // Store email in profile
-      await db.update("profiles","id=eq."+user.id,{email:email.trim()});
-      setEmailSent(true);
-    }catch(e){setEmailErr(e.message);}
-    setLoading(false);
-  }
+  if(!email.trim()||!email.includes("@")){setEmailErr("Enter a valid email address.");return;}
+  setLoading(true);setEmailErr("");
+  try{
+    const res=await fetch(SUPA_URL+"/auth/v1/otp",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","apikey":SUPA_KEY},
+      body:JSON.stringify({email:email.trim(),create_user:false}),
+    });
+    if(!res.ok){
+      const e=await res.json();
+      throw new Error(e.msg||"Could not send verification code.");
+    }
+    await db.update("profiles","id=eq."+user.id,{email:email.trim()});
+    setEmailSent(true);
+  }catch(e){setEmailErr(e.message);}
+  setLoading(false);
+    }
 
   async function checkVerification(){
     setLoading(true);
@@ -650,6 +652,23 @@ function CreateGroup({user,setView,onGroupCreated}) {
     }catch(e){setEmailErr(e.message);}
     setLoading(false);
   }
+
+  async function verifyOtp(){
+  setLoading(true);setEmailErr("");
+  try{
+    const res=await fetch(SUPA_URL+"/auth/v1/verify",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","apikey":SUPA_KEY},
+      body:JSON.stringify({type:"email",email:email.trim(),token:otp.trim()}),
+    });
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.msg||"Invalid code. Try again.");
+    // Code verified — update profile and allow group creation
+    await db.update("profiles","id=eq."+user.id,{email_verified:true});
+    setEmailStep(false);
+  }catch(e){setEmailErr(e.message);}
+  setLoading(false);
+      }
 
   if(emailStep) return(
     <div>
@@ -667,15 +686,16 @@ function CreateGroup({user,setView,onGroupCreated}) {
             <Btn full onClick={sendVerification} disabled={loading||!email.trim()}>{loading?"Sending...":"Send Verification Email"}</Btn>
           </div>
         ):(
-          <div>
-            <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
-              <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Verification email sent</div>
-              <div style={{color:C.textMid,fontSize:12}}>Check your inbox at {email} and click the verification link. Then come back here.</div>
-            </div>
-            {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
-            <Btn full onClick={checkVerification} disabled={loading}>{loading?"Checking...":"I've Verified — Check Again"}</Btn>
-            <button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
-          </div>
+  <div>
+    <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
+      <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Verification code sent</div>
+      <div style={{color:C.textMid,fontSize:12}}>Enter the 6-digit code sent to {email}</div>
+    </div>
+    {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+    <Inp label="6-digit code" placeholder="123456" value={otp} onChange={e=>setOtp(e.target.value)} style={{letterSpacing:"0.3em",fontSize:20,textAlign:"center"}}/>
+    <Btn full onClick={verifyOtp} disabled={loading||otp.length<6}>{loading?"Verifying...":"Verify Email"}</Btn>
+    <button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
+  </div>
         )}
       </Card>
     </div>
