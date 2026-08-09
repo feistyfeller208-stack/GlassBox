@@ -623,20 +623,21 @@ function CreateGroup({user,setView,onGroupCreated}) {
   if(!email.trim()||!email.includes("@")){setEmailErr("Enter a valid email address.");return;}
   setLoading(true);setEmailErr("");
   try{
-    const res=await fetch(SUPA_URL+"/auth/v1/otp",{
+    // Use Supabase magic link — sends a link to the email
+    const res=await fetch(SUPA_URL+"/auth/v1/magiclink",{
       method:"POST",
       headers:{"Content-Type":"application/json","apikey":SUPA_KEY},
-      body:JSON.stringify({email:email.trim(),create_user:false}),
+      body:JSON.stringify({email:email.trim()}),
     });
     if(!res.ok){
       const e=await res.json();
-      throw new Error(e.msg||"Could not send verification code.");
+      throw new Error(e.msg||e.message||"Could not send verification email.");
     }
     await db.update("profiles","id=eq."+user.id,{email:email.trim()});
     setEmailSent(true);
   }catch(e){setEmailErr(e.message);}
   setLoading(false);
-    }
+  }
 
   async function checkVerification(){
     setLoading(true);
@@ -656,19 +657,20 @@ function CreateGroup({user,setView,onGroupCreated}) {
   async function verifyOtp(){
   setLoading(true);setEmailErr("");
   try{
-    const res=await fetch(SUPA_URL+"/auth/v1/verify",{
-      method:"POST",
-      headers:{"Content-Type":"application/json","apikey":SUPA_KEY},
-      body:JSON.stringify({type:"email",email:email.trim(),token:otp.trim()}),
+    // Check if the email in auth has been confirmed
+    const res=await fetch(SUPA_URL+"/auth/v1/user",{
+      headers:{...headers,"Authorization":"Bearer "+_token}
     });
     const data=await res.json();
-    if(!res.ok)throw new Error(data.msg||"Invalid code. Try again.");
-    // Code verified — update profile and allow group creation
-    await db.update("profiles","id=eq."+user.id,{email_verified:true});
-    setEmailStep(false);
+    if(data.email===email.trim()&&data.email_confirmed_at){
+      await db.update("profiles","id=eq."+user.id,{email_verified:true});
+      setEmailStep(false);
+    } else {
+      setEmailErr("Email not verified yet. Click the link in your inbox first, then come back and tap this button.");
+    }
   }catch(e){setEmailErr(e.message);}
   setLoading(false);
-      }
+        }
 
   if(emailStep) return(
     <div>
@@ -687,10 +689,9 @@ function CreateGroup({user,setView,onGroupCreated}) {
           </div>
         ):(
   <div>
-    <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
-      <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Verification code sent</div>
-      <div style={{color:C.textMid,fontSize:12}}>Enter the 6-digit code sent to {email}</div>
-    </div>
+    {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+<Btn full onClick={verifyOtp} disabled={loading}>{loading?"Checking...":"I've Clicked the Link — Continue"}</Btn>
+<button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
     {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
     <Inp label="6-digit code" placeholder="123456" value={otp} onChange={e=>setOtp(e.target.value)} style={{letterSpacing:"0.3em",fontSize:20,textAlign:"center"}}/>
     <Btn full onClick={verifyOtp} disabled={loading||otp.length<6}>{loading?"Verifying...":"Verify Email"}</Btn>
