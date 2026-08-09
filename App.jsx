@@ -612,7 +612,74 @@ function GroupBrowser({user,setView,setSelectedGroup}) {
 function CreateGroup({user,setView,onGroupCreated}) {
   const [form,setForm]=useState({name:"",contributionAmount:"",payoutSchedule:"monthly",payoutPercent:"25",interestRate:"10",maxLoanMultiplier:"2",description:""});
   const [loading,setLoading]=useState(false);
+  const [emailStep,setEmailStep]=useState(!user.email_verified);
+  const [email,setEmail]=useState("");
+  const [emailSent,setEmailSent]=useState(false);
+  const [emailErr,setEmailErr]=useState("");
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
+
+  async function sendVerification(){
+    if(!email.trim()||!email.includes("@")){setEmailErr("Enter a valid email address.");return;}
+    setLoading(true);setEmailErr("");
+    try{
+      // Update email in Supabase Auth — triggers verification email
+      const res=await fetch(SUPA_URL+"/auth/v1/user",{
+        method:"PUT",
+        headers:{...headers,"Authorization":"Bearer "+_token,"Content-Type":"application/json"},
+        body:JSON.stringify({email:email.trim()}),
+      });
+      if(!res.ok)throw new Error("Failed to send verification email.");
+      // Store email in profile
+      await db.update("profiles","id=eq."+user.id,{email:email.trim()});
+      setEmailSent(true);
+    }catch(e){setEmailErr(e.message);}
+    setLoading(false);
+  }
+
+  async function checkVerification(){
+    setLoading(true);
+    try{
+      const res=await fetch(SUPA_URL+"/auth/v1/user",{headers:{...headers,"Authorization":"Bearer "+_token}});
+      const data=await res.json();
+      if(data.email_confirmed_at){
+        await db.update("profiles","id=eq."+user.id,{email_verified:true});
+        setEmailStep(false);
+      } else {
+        setEmailErr("Email not verified yet. Check your inbox and click the link, then come back and tap Check Again.");
+      }
+    }catch(e){setEmailErr(e.message);}
+    setLoading(false);
+  }
+
+  if(emailStep) return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:22}}>
+        <Btn variant="ghost" size="sm" onClick={()=>setView("groups")}>← Back</Btn>
+        <h2 style={{margin:0,color:C.text,fontSize:18,fontWeight:800}}>Create Group</h2>
+      </div>
+      <Card>
+        <div style={{color:C.text,fontWeight:700,fontSize:15,marginBottom:6}}>Verify your email first</div>
+        <div style={{color:C.muted,fontSize:13,marginBottom:18,lineHeight:1.6}}>Group admins need a verified email address. This is how we contact you if there are issues with your group and how members can reach you.</div>
+        {!emailSent?(
+          <div>
+            {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+            <Inp label="Your email address" placeholder="amina@example.com" value={email} onChange={e=>setEmail(e.target.value)}/>
+            <Btn full onClick={sendVerification} disabled={loading||!email.trim()}>{loading?"Sending...":"Send Verification Email"}</Btn>
+          </div>
+        ):(
+          <div>
+            <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
+              <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Verification email sent</div>
+              <div style={{color:C.textMid,fontSize:12}}>Check your inbox at {email} and click the verification link. Then come back here.</div>
+            </div>
+            {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+            <Btn full onClick={checkVerification} disabled={loading}>{loading?"Checking...":"I've Verified — Check Again"}</Btn>
+            <button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
 
   async function create() {
     if(!form.name||!form.contributionAmount)return;
