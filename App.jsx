@@ -2125,7 +2125,7 @@ function Profile({user,onLogout}) {
           <Card style={{marginBottom:14}}>
             <div style={{color:C.text,fontWeight:700,fontSize:14,marginBottom:12}}>Security Status</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
-              {[["Hash Chain","Active",C.green],["Supabase Auth","Enabled",C.green],["RLS Policies","Enforced",C.accent]].map(([t,v,col])=>(
+              {[["Hash Chain","Active",C.green],["Supabase Auth","Enabled",C.green],["RLS Policies","Enforced",C.accent],["Email",user.email_verified?"Verified":"Not verified",user.email_verified?C.green:C.amber]].map(([t,v,col])=>(
                 <div key={t} style={{background:col+"10",border:`1px solid ${col}20`,borderRadius:8,padding:"10px 12px"}}><div style={{color:col,fontWeight:700,fontSize:11,letterSpacing:".04em",textTransform:"uppercase",marginBottom:3}}>{t}</div><div style={{color:C.textMid,fontSize:12}}>{v}</div></div>
               ))}
             </div>
