@@ -623,39 +623,34 @@ function CreateGroup({user,setView,onGroupCreated}) {
   if(!email.trim()||!email.includes("@")){setEmailErr("Enter a valid email address.");return;}
   setLoading(true);setEmailErr("");
   try{
-    // Use Supabase magic link — sends a link to the email
-    const res=await fetch(SUPA_URL+"/auth/v1/magiclink",{
+    const res=await fetch(SUPA_URL+"/functions/v1/send-email-otp",{
       method:"POST",
-      headers:{"Content-Type":"application/json","apikey":SUPA_KEY},
-      body:JSON.stringify({email:email.trim()}),
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+_token},
+      body:JSON.stringify({email:email.trim(),user_id:user.id}),
     });
-    if(!res.ok){
-      const e=await res.json();
-      throw new Error(e.msg||e.message||"Could not send verification email.");
-    }
-    await db.update("profiles","id=eq."+user.id,{email:email.trim()});
+    if(!res.ok){const e=await res.json();throw new Error(e.error||"Failed to send code.");}
     setEmailSent(true);
   }catch(e){setEmailErr(e.message);}
   setLoading(false);
   }
 
   async function verifyOtp(){
+  if(!otp.trim()||otp.length<6){setEmailErr("Enter the 6-digit code.");return;}
   setLoading(true);setEmailErr("");
   try{
-    // Check if the email in auth has been confirmed
-    const res=await fetch(SUPA_URL+"/auth/v1/user",{
-      headers:{...headers,"Authorization":"Bearer "+_token}
-    });
-    const data=await res.json();
-    if(data.email===email.trim()&&data.email_confirmed_at){
-      await db.update("profiles","id=eq."+user.id,{email_verified:true});
-      setEmailStep(false);
-    } else {
-      setEmailErr("Email not verified yet. Click the link in your inbox first, then come back and tap this button.");
+    const rows=await db.select("profiles","id=eq."+user.id);
+    const profile=rows[0];
+    if(!profile.email_otp||profile.email_otp!==otp.trim()){
+      setEmailErr("Incorrect code. Try again.");setLoading(false);return;
     }
+    if(new Date(profile.email_otp_expires_at)<new Date()){
+      setEmailErr("Code expired. Send a new one.");setLoading(false);return;
+    }
+    await db.update("profiles","id=eq."+user.id,{email_verified:true,email_otp:null,email_otp_expires_at:null});
+    setEmailStep(false);
   }catch(e){setEmailErr(e.message);}
   setLoading(false);
-        }
+     }
 
   if(emailStep) return(
     <div>
@@ -668,10 +663,15 @@ function CreateGroup({user,setView,onGroupCreated}) {
         <div style={{color:C.muted,fontSize:13,marginBottom:18,lineHeight:1.6}}>Group admins need a verified email address. This is how we contact you if there are issues with your group and how members can reach you.</div>
         {!emailSent?(
           <div>
-            {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
-            <Inp label="Your email address" placeholder="amina@example.com" value={email} onChange={e=>setEmail(e.target.value)}/>
-            <Btn full onClick={sendVerification} disabled={loading||!email.trim()}>{loading?"Sending...":"Send Verification Email"}</Btn>
-          </div>
+    <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
+      <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Code sent</div>
+      <div style={{color:C.textMid,fontSize:12}}>Enter the 6-digit code sent to {email}</div>
+    </div>
+    {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+    <Inp label="6-digit code" placeholder="123456" value={otp} onChange={e=>setOtp(e.target.value)} style={{letterSpacing:"0.3em",fontSize:20,textAlign:"center"}}/>
+    <Btn full onClick={verifyOtp} disabled={loading||otp.length<6}>{loading?"Verifying...":"Verify Email"}</Btn>
+    <button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
+  </div>
         ):(
   <div>
     <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
