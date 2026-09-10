@@ -613,8 +613,8 @@ function CreateGroup({user,setView,onGroupCreated}) {
   const [otp,setOtp]=useState("");
   const [form,setForm]=useState({name:"",contributionAmount:"",payoutSchedule:"monthly",payoutPercent:"25",interestRate:"10",maxLoanMultiplier:"2",description:""});
   const [loading,setLoading]=useState(false);
-  const [emailStep,setEmailStep]=useState(!user.email_verified);
-  const [email,setEmail]=useState("");
+  const [emailStep,setEmailStep]=useState(user.email_verified!==true);
+  const [email,setEmail]=useState(user.email||"");
   const [emailSent,setEmailSent]=useState(false);
   const [emailErr,setEmailErr]=useState("");
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
