@@ -661,27 +661,23 @@ function CreateGroup({user,setView,onGroupCreated}) {
       <Card>
         <div style={{color:C.text,fontWeight:700,fontSize:15,marginBottom:6}}>Verify your email first</div>
         <div style={{color:C.muted,fontSize:13,marginBottom:18,lineHeight:1.6}}>Group admins need a verified email address. This is how we contact you if there are issues with your group and how members can reach you.</div>
-        {!emailSent?(
+                {!emailSent?(
           <div>
-    <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
-      <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Code sent</div>
-      <div style={{color:C.textMid,fontSize:12}}>Enter the 6-digit code sent to {email}</div>
-    </div>
-    {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
-    <Inp label="6-digit code" placeholder="123456" value={otp} onChange={e=>setOtp(e.target.value)} style={{letterSpacing:"0.3em",fontSize:20,textAlign:"center"}}/>
-    <Btn full onClick={verifyOtp} disabled={loading||otp.length<6}>{loading?"Verifying...":"Verify Email"}</Btn>
-    <button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
-  </div>
+            {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+            <Inp label="Your email address" placeholder="amina@example.com" value={email} onChange={e=>setEmail(e.target.value)}/>
+            <Btn full onClick={sendVerification} disabled={loading||!email.trim()}>{loading?"Sending...":"Send Verification Code"}</Btn>
+          </div>
         ):(
-  <div>
-    <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
-      <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Verification email sent</div>
-      <div style={{color:C.textMid,fontSize:12}}>Check your inbox at {email} and click the verification link. Then come back here.</div>
-    </div>
-    {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
-    <Btn full onClick={verifyOtp} disabled={loading}>{loading?"Checking...":"I've Clicked the Link — Continue"}</Btn>
-    <button onClick={()=>setEmailSent(false)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
-  </div>
+          <div>
+            <div style={{background:C.greenSoft,border:`1px solid ${C.green}33`,borderRadius:8,padding:"12px 14px",marginBottom:16}}>
+              <div style={{color:C.green,fontWeight:600,fontSize:13,marginBottom:3}}>Code sent</div>
+              <div style={{color:C.textMid,fontSize:12}}>Enter the 6-digit code sent to {email}</div>
+            </div>
+            {emailErr&&<div style={{color:C.red,fontSize:13,marginBottom:10}}>{emailErr}</div>}
+            <Inp label="6-digit code" placeholder="123456" value={otp} onChange={e=>setOtp(e.target.value)} style={{letterSpacing:"0.3em",fontSize:20,textAlign:"center"}}/>
+            <Btn full onClick={verifyOtp} disabled={loading||otp.length<6}>{loading?"Verifying...":"Verify Email"}</Btn>
+            <button onClick={()=>{setEmailSent(false);setOtp("");setEmailErr("");}} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",marginTop:10,display:"block",width:"100%",textAlign:"center",fontFamily:"inherit"}}>Use a different email</button>
+          </div>
         )}
       </Card>
     </div>
